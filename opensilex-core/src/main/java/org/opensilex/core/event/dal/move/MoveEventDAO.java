@@ -19,9 +19,11 @@ import org.apache.jena.sparql.syntax.ElementFilter;
 import org.apache.jena.sparql.syntax.ElementGroup;
 import org.apache.jena.vocabulary.RDF;
 import org.bson.conversions.Bson;
+import org.opensilex.sparql.utils.Ontology;
 import org.opensilex.core.event.dal.EventDAO;
 import org.opensilex.core.ontology.Oeev;
 import org.opensilex.core.ontology.Time;
+import org.opensilex.core.ontology.Oeso;
 import org.opensilex.core.organisation.dal.InfrastructureFacilityModel;
 import org.opensilex.nosql.mongodb.MongoDBService;
 import org.opensilex.security.user.dal.UserModel;
@@ -434,6 +436,81 @@ public class MoveEventDAO extends EventDAO<MoveModel> {
     }
 
     /**
+     * @param target the object on which we get the position
+     * @param start  the time at which we search the position
+     * @return the position of the given object during a time interval with a descending sort on the move end.
+     * @apiNote The method run in two times :
+     * <ul>
+     * <li> Search corresponding move URI and location from the SPARQL repository </li>
+     * <li> Then for each move URI, get the corresponding {@link MoveEventNoSqlModel} from the mongodb collection.
+     * <ul>
+     * <li> This last operation is done with a single query with a IN filter on {@link MoveEventNoSqlModel#ID_FIELD} field. </li>
+     * <li> A {@link Map} between move URI and {@link PositionModel} is maintained in order to associated data from the two databases</li>
+     * </ul>
+     * </li>
+     * </ul>
+     * @see MoveEventDAO#searchMoveEvents(URI, String, OffsetDateTime, OffsetDateTime, List, Integer, Integer)
+     */
+    public LinkedHashMap<MoveModel, PositionModel> getPositionsHistoryWithoutPagination(
+            URI target,
+            String descriptionPattern,
+            OffsetDateTime start, OffsetDateTime end) throws Exception {
+
+        Objects.requireNonNull(target);
+//        OrderBy orderBy = new OrderBy("_end__timestamp=asc");
+        OrderBy orderBy = new OrderBy("_end__timestamp", Order.ASCENDING);
+        ArrayList<OrderBy> arr_OrderBy = new ArrayList<>();
+        arr_OrderBy.add(orderBy);
+        // search move history sorted with DESC order on move end, from SPARQL repository
+        Stream<MoveModel> locationHistory = searchMoveEvents(target, descriptionPattern, start, end, arr_OrderBy, null, null);
+
+        // Index of position by uri, sorted by event end time
+        LinkedHashMap<URI, PositionModel> positionsByUri = new LinkedHashMap<>();
+        Map<URI, MoveModel> moveByURI = new HashMap<>();
+
+        // for each location, create a position model initialized with the location and update position index
+        locationHistory.forEach(move -> {
+            moveByURI.put(move.getUri(), move);
+            positionsByUri.put(move.getUri(), null);
+        });
+
+
+        if (start != null) {
+            MoveModel lastMove = getLastMoveAfter(target, start);
+            if (lastMove != null) {
+                positionsByUri.put(lastMove.getUri(), null);
+            }
+        }
+
+        if (!positionsByUri.isEmpty()) {
+
+            Bson eventInIdFilter = getEventIdInFilter(positionsByUri.keySet().stream());
+            Bson concernedItemPositionProjection = getConcernedItemArrayItemProjection(target);
+
+            // found all positions from mongodb collection according the filter
+            moveEventCollection
+                    .find(eventInIdFilter)
+                    .projection(concernedItemPositionProjection)//  don't fetch concernedItem and position of other item
+                    .forEach(moveNoSqlModel -> {
+                        if (moveNoSqlModel.getTargetPositions().size() > 0) {
+                            positionsByUri.put(moveNoSqlModel.getUri(), moveNoSqlModel.getTargetPositions().get(0).getPosition());
+                        } else {
+                            positionsByUri.remove(moveNoSqlModel.getUri());
+                        }
+                    });
+
+        }
+
+        LinkedHashMap<MoveModel, PositionModel> results = new LinkedHashMap<>();
+        positionsByUri.forEach((uri, position) -> {
+            results.put(moveByURI.get(uri), position);
+        });
+        return results;
+    }
+
+    
+    
+    /**
      * @param concernedItemUri the URI of the item concerned by a move event.
      * @return a {@link Bson} with {@link Filters#eq(Object)} expression on itemPositions.concernedItem property and the given URI
      * @see MoveEventNoSqlModel#getTargetPositions()
@@ -557,5 +634,36 @@ public class MoveEventDAO extends EventDAO<MoveModel> {
         }
 
         return moveNoSqlModel.getTargetPositions().get(0).getPosition();
+    }
+    
+    public enum ReverseLink {FROM, TO} ;
+    /**
+     * @param link The reverse search direction
+     * @param targetUri the object to reverse search
+     * @return A list of all device model which are a target of the event
+     * @apiNote if time is null, then the last known position will be returned
+     */
+    public List<URI> reverseSearchURIDevice(URI targetUri, ReverseLink link ) throws Exception {
+        // select for each target, the devices attached to it via a move event
+        Var device_var = SPARQLQueryHelper.makeVar("device");
+        Var event_var = SPARQLQueryHelper.makeVar("move");
+        Var type_var = SPARQLQueryHelper.makeVar("type");
+        SelectBuilder innerSelect = new SelectBuilder()
+                .addVar(device_var)
+                .addWhere(event_var, Oeev.to, SPARQLDeserializers.nodeURI(targetUri))
+                .addWhere(event_var, Oeev.concerns, device_var)
+                .addWhere(device_var, RDF.type, type_var)
+                .addWhere(type_var, Ontology.subClassAny, Oeso.Device);
+
+        ArrayList<URI> devicesURIs = new ArrayList<>();
+        sparql.executeSelectQueryAsStream(innerSelect).forEach(result -> {
+            String device_uri = result.getStringValue(device_var.getVarName());
+            try {
+                devicesURIs.add(new URI(device_uri));
+            } catch (URISyntaxException e) {
+                e.printStackTrace();
+            }
+        });
+        return devicesURIs;
     }
 }

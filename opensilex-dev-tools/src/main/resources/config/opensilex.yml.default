@@ -1,34 +1,40 @@
-
 ontologies:
-    baseURI: http://www.phenome-fppn.fr/
-    baseURIAlias: test
+    baseURI: http://opensilex.dev/
+    baseURIAlias: dev
     sparql:
         #        implementation: org.opensilex.sparql.rdf4j.RDF4JInMemoryServiceFactory
         config:
-            serverURI: http://138.102.159.37:8080/rdf4j-server/
-            repository: test-modularity
-
+            serverURI: http://localhost:8667/rdf4j-server/
+            repository: opensilex
 
 file-system:
     fs:
         config:
-            basePath: ../../opensilex-data
-#            defaultFS:
-#                implementation: org.opensilex.fs.local.LocalFileSystemConnection
-#            connections:
-#                irods:
-#                    implementation: org.opensilex.fs.irods.IrodsFileSystemConnection
-#                    config:
-#                        basePath: /FranceGrillesZone/home/fg-phenome/PHIS
-#            customPath:
-#                datafile/: irods
+            defaultFS: local
+            connections:
+                local:
+                    implementation: org.opensilex.fs.local.LocalFileSystemConnection
+                    config:
+                        basePath: ../../opensilex-data
+            #     irods:
+            #         implementation: org.opensilex.fs.irods.IrodsFileSystemConnection
+            #         config:
+            #             basePath: /FranceGrillesZone/home/fg-phenome/PHIS
+                gridfs:
+                    implementation: org.opensilex.fs.gridfs.GridFSConnection
+                    config:
+                        host: localhost
+                        port: 8668
+                        database: opensilex
+            # customPath:
+            #     datafile/: irods
 
 big-data:
     mongodb:
         config:
             host: localhost
             port: 8668
-            database: test-modularity
+            database: opensilex
     #            timezone: Europe/Paris
 
 phisws:
@@ -68,3 +74,10 @@ phisws:
 system:
     ignoredModules:
         org.opensilex.opensilex-mobile.MobileModule: opensilex-mobile.jar
+
+core:
+    enableOntologyCaching: false
+
+server:
+  # Server public URI (String)
+    publicURI: http://192.168.1.36:8080/
